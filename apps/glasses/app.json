@@ -7,7 +7,7 @@
   "min_sdk_version": "0.0.16",
   "entrypoint": "index.html",
   "permissions": [
-    { "name": "network", "desc": "Fetch on-call alerts from your Pagerline server.", "whitelist": ["http://localhost:3300"] }
+    { "name": "network", "desc": "Fetch on-call alerts from your Pagerline server.", "whitelist": ["https://pagerline.vercel.app", "http://localhost:3300"] }
   ],
   "supported_languages": ["en"]
 }

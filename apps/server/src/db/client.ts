@@ -11,7 +11,9 @@ export function getDb(): Db {
   if (globalForDb.pagerlineDb) return globalForDb.pagerlineDb
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL is not set')
-  const client = postgres(url, { max: 5 })
+  // prepare: false — Neon's pooled endpoint (PgBouncer, transaction mode) cannot keep
+  // named prepared statements across transactions; harmless for a direct local connection.
+  const client = postgres(url, { max: 5, prepare: false })
   const db = drizzle(client, { schema })
   globalForDb.pagerlineDb = db
   return db

@@ -15,3 +15,5 @@ next-env.d.ts
 .pgdata/
 .logs/
 .DS_Store
+.vercel
+.env*

@@ -1,0 +1,12 @@
+# Never upload local env files or local artefacts to Vercel.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+.pgdata
+.logs
+.shots
+**/.next
+**/dist
