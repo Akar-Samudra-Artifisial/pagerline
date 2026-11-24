@@ -1,0 +1,14 @@
+{
+  "name": "pagerline",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "dev:server": "pnpm --filter @pagerline/server dev",
+    "dev:glasses": "pnpm --filter @pagerline/glasses dev",
+    "db:migrate": "pnpm --filter @pagerline/server db:migrate",
+    "seed": "pnpm --filter @pagerline/demo-seed seed"
+  }
+}

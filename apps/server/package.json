@@ -1,0 +1,28 @@
+{
+  "name": "@pagerline/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 3300",
+    "build": "next build",
+    "start": "next start --port 3300",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@pagerline/shared": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "next": "16.4.6",
+    "postgres": "3.4.9",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "drizzle-kit": "0.31.11",
+    "typescript": "5.9.3"
+  }
+}

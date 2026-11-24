@@ -1,0 +1,9 @@
+{
+  "name": "@pagerline/demo-seed",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "seed": "node --env-file-if-exists=../../apps/server/.env.local index.mjs"
+  }
+}

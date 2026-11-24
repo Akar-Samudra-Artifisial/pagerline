@@ -1,0 +1,23 @@
+{
+  "name": "@pagerline/glasses",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "pack": "pnpm build && evenhub pack app.json dist",
+    "simulate": "evenhub-simulator http://localhost:5173 --automation-port 9898"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "0.0.16",
+    "@pagerline/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "0.2.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.6"
+  }
+}
