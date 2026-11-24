@@ -31,9 +31,15 @@ export const MAX_WEBHOOK_BYTES = 1024 * 1024
  * Returns null when the limit is exceeded.
  */
 export async function readBodyLimited(request: Request, maxBytes = MAX_WEBHOOK_BYTES): Promise<string | null> {
+  const bytes = await readBytesLimited(request, maxBytes)
+  return bytes === null ? null : bytes.toString('utf8')
+}
+
+/** Raw body bytes, refusing more than `maxBytes` (declared or streamed); null when exceeded. */
+export async function readBytesLimited(request: Request, maxBytes: number): Promise<Buffer | null> {
   const declared = Number(request.headers.get('content-length') ?? '0')
   if (Number.isFinite(declared) && declared > maxBytes) return null
-  if (!request.body) return ''
+  if (!request.body) return Buffer.alloc(0)
 
   const reader = request.body.getReader()
   const chunks: Uint8Array[] = []
@@ -48,7 +54,7 @@ export async function readBodyLimited(request: Request, maxBytes = MAX_WEBHOOK_B
     }
     chunks.push(value)
   }
-  return Buffer.concat(chunks).toString('utf8')
+  return Buffer.concat(chunks)
 }
 
 const MAX_JSON_BYTES = 16 * 1024

@@ -182,6 +182,42 @@ export type PairStatusResponse =
   | { status: 'expired' }
 
 // ---------------------------------------------------------------------------
+// Voice commands (H4) and AI summaries (H5).
+
+/**
+ * What a spoken command maps to. `rerun`/`resolve` are NEVER executed by `/api/voice`:
+ * the glasses must still call `POST /api/actions/intent` and show the Confirm screen.
+ */
+export const VOICE_INTENTS = ['rerun', 'resolve', 'next', 'back', 'inbox', 'summary', 'unknown'] as const
+export type VoiceIntent = (typeof VOICE_INTENTS)[number]
+
+/**
+ * `POST /api/voice[?alertId=&sampleRate=]` 200 response.
+ * Body = audio: raw PCM s16le mono (`Content-Type: audio/pcm` or `application/octet-stream`,
+ * `sampleRate` default 16000) or a container (`audio/wav`, `audio/webm`, `audio/ogg`, `audio/mpeg`, `audio/mp4`).
+ */
+export interface VoiceResponse {
+  /** Transcript (English, ≤ 200 chars). */
+  transcript: string
+  intent: VoiceIntent
+  /** Echo of the `alertId` context, when given and the alert exists. */
+  alertId?: string
+}
+
+export type SummarySource = 'ai' | 'cache' | 'fallback'
+
+/** `POST /api/alerts/{id}/summary[?refresh=1]` 200 response. */
+export interface SummaryResponse {
+  alertId: string
+  /** Plain text, ≤ 240 characters. */
+  summary: string
+  /** `ai` = generated now, `cache` = stored AI summary, `fallback` = heuristic (AI unavailable). */
+  source: SummarySource
+  /** When the AI summary was generated; null for `fallback`. */
+  generatedAt: string | null
+}
+
+// ---------------------------------------------------------------------------
 // Audit log.
 
 export interface AuditEntry {

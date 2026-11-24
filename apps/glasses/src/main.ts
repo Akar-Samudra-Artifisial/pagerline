@@ -1,19 +1,23 @@
-import type { ActionKind, ActionPreview, Alert } from '@pagerline/shared'
+import type { ActionKind, ActionPreview, Alert, VoiceIntent } from '@pagerline/shared'
 import { waitForEvenAppBridge } from '@evenrealities/even_hub_sdk'
 import {
   ApiError,
   confirmAction,
   createIntent,
   fetchAlerts,
+  fetchSummary,
   hasDeviceToken,
   isMock,
   pairingStatus,
   pairUrl,
+  sendVoice,
   setDeviceToken,
   startPairing,
+  type VoiceClip,
 } from './api'
-import { CONFIRM_BODY, DETAIL_BODY, HEADER, IDLE_BODY, PAIR_BODY } from './ids'
+import { CONFIRM_BODY, DETAIL_BODY, HEADER, IDLE_BODY, PAIR_BODY, VOICE_BODY } from './ids'
 import { toGesture, type Gesture } from './input'
+import { feedPcm, startRecording, type Recording } from './recorder'
 import { Renderer } from './render'
 import {
   ACTION_LABEL,
@@ -25,11 +29,12 @@ import {
   type ConfirmPhase,
   type ResultView,
 } from './screens/actions'
-import { detailBody, detailPage } from './screens/detail'
+import { detailBody, detailPage, type SummaryView } from './screens/detail'
 import { headerText } from './screens/format'
 import { idleBody, idlePage } from './screens/idle'
 import { inboxAlerts, inboxPage } from './screens/inbox'
 import { pairBody, pairPage, type PairView } from './screens/pair'
+import { voiceBody, voicePage, type VoiceMic, type VoiceView } from './screens/voice'
 import { clearDeviceToken, loadDeviceToken, saveDeviceToken } from './token'
 
 const POLL_MS = 3000
@@ -43,6 +48,14 @@ const NONCE_TTL_MS = 60_000
 const UNPAIR_PROMPT_MS = 30_000
 /** Keep at most this many alerts in memory (newest by seq, plus the one on screen). */
 const MAX_ALERTS = 200
+/** Voice command recording limit (server accepts ~8 s); a tap stops it sooner. */
+const VOICE_MAX_MS = 6000
+/** How long the transcript + intent stay on screen before the command runs. */
+const VOICE_HEARD_MS = 2000
+/** Voice error/notice screens return to Detail after this long. */
+const VOICE_MESSAGE_MS = 2500
+/** How long a failed summary refresh is flagged next to the kept text. */
+const SUMMARY_NOTE_MS = 3000
 
 type Screen =
   | { name: 'pair' }
@@ -53,6 +66,8 @@ type Screen =
   | { name: 'confirm'; alertId: string; preview: ActionPreview; deadline: number; phase: 'ready' | 'sending' | 'expired' }
   | { name: 'result'; alertId: string; view: ResultView }
   | { name: 'unpair' }
+  /** `token` identifies one voice attempt; async steps of an older attempt bail out. */
+  | { name: 'voice'; alertId: string; token: number; view: VoiceView }
 
 const state = {
   screen: { name: 'idle' } as Screen,
@@ -70,6 +85,8 @@ const state = {
   /** An intent request is in flight (actions screen ignores input meanwhile). */
   busy: false,
   pair: { phase: 'starting' } as PairView,
+  /** AI summaries by alert id (the server caches them too). */
+  summaries: new Map<string, SummaryView>(),
 }
 
 const bridge = await waitForEvenAppBridge()
@@ -94,6 +111,7 @@ const TITLES: Record<Screen['name'], string> = {
   confirm: 'Confirm',
   result: 'Result',
   unpair: 'Unpair?',
+  voice: 'Voice',
 }
 
 function header(): string {
@@ -134,13 +152,15 @@ function render(): Promise<void> {
       return renderer.show(resultPage(header(), s.view, state.alerts.get(s.alertId)))
     case 'unpair':
       return renderer.show(unpairPage(header()))
+    case 'voice':
+      return renderer.show(voicePage(header(), s.view))
     case 'detail': {
       const alert = state.alerts.get(s.alertId)
       if (!alert) {
         state.screen = { name: 'inbox' }
         return render()
       }
-      return renderer.show(detailPage(header(), alert))
+      return renderer.show(detailPage(header(), alert, state.summaries.get(s.alertId)))
     }
   }
 }
@@ -154,7 +174,10 @@ function clearScreenTimer(): void {
 
 function go(screen: Screen): void {
   clearScreenTimer()
+  // Leaving the voice screen always releases the microphone.
+  if (screen.name !== 'voice') stopMic()
   state.screen = screen
+  if (screen.name === 'detail') loadSummary(screen.alertId)
   render().catch((err: unknown) => console.error(err))
   mirror()
 }
@@ -212,7 +235,10 @@ function trimAlerts(): void {
   const s = state.screen
   const pinned = 'alertId' in s ? s.alertId : undefined
   for (const a of newestFirst().slice(MAX_ALERTS)) {
-    if (a.id !== pinned) state.alerts.delete(a.id)
+    if (a.id !== pinned) {
+      state.alerts.delete(a.id)
+      state.summaries.delete(a.id)
+    }
   }
 }
 
@@ -226,7 +252,7 @@ function refresh(updated: ReadonlySet<string>): void {
   if (updated.size > 0 && s.name === 'idle') tasks.push(renderer.upgrade(IDLE_BODY, idleBody(newestFirst())))
   if (s.name === 'detail' && updated.has(s.alertId)) {
     const alert = state.alerts.get(s.alertId)
-    if (alert) tasks.push(renderer.upgrade(DETAIL_BODY, detailBody(alert)))
+    if (alert) tasks.push(renderer.upgrade(DETAIL_BODY, detailBody(alert, state.summaries.get(s.alertId))))
   }
   Promise.all(tasks).catch((err: unknown) => console.error(err))
   mirror()
@@ -265,12 +291,14 @@ function showPair(view: PairView): void {
 }
 
 async function unpair(): Promise<void> {
+  stopMic()
   sessionGen++
   stopPolling()
   clearScreenTimer()
   setDeviceToken('')
   if (!isMock()) await clearDeviceToken(bridge)
   state.alerts.clear()
+  state.summaries.clear()
   state.cursor = null
   state.inboxIds = []
   state.online = false
@@ -345,6 +373,7 @@ async function onPaired(token: string): Promise<void> {
   }
   sessionGen++
   state.alerts.clear()
+  state.summaries.clear()
   state.cursor = null
   state.inboxIds = []
   setDeviceToken(token)
@@ -385,14 +414,20 @@ function handleActionError(err: unknown, alertId: string, headline: string): voi
   scheduleResultBack(alertId)
 }
 
-async function startIntent(alertId: string, action: ActionKind): Promise<void> {
-  if (state.busy) return
+/**
+ * Ask the server for a preview + nonce and show Confirm (Cancel focused).
+ * `stillWanted` reports whether the screen that asked (actions list or a voice
+ * command) is still showing; if not, the preview is dropped.
+ * Resolves `false` only when nothing was started because another request is running.
+ */
+async function startIntent(alertId: string, action: ActionKind, stillWanted: () => boolean): Promise<boolean> {
+  if (state.busy) return false
   state.busy = true
   renderer.upgrade(HEADER, header()).catch((err: unknown) => console.error(err))
+  const gen = sessionGen
   try {
     const preview = await createIntent(alertId, action)
-    const s = state.screen
-    if (s.name !== 'actions' || s.alertId !== alertId) return // user navigated away meanwhile
+    if (gen !== sessionGen || !stillWanted()) return true // user navigated away meanwhile
     // Local deadline from the server's expiresAt, clamped to the documented TTL so a
     // skewed clock never shows more time than the nonce really has.
     const ttl = Date.parse(preview.expiresAt) - Date.now()
@@ -400,10 +435,12 @@ async function startIntent(alertId: string, action: ActionKind): Promise<void> {
     go({ name: 'confirm', alertId, preview, deadline, phase: 'ready' })
     tickConfirm(preview.requestId)
   } catch (err) {
+    if (gen !== sessionGen || !stillWanted()) return true
     handleActionError(err, alertId, ACTION_LABEL[action])
   } finally {
     state.busy = false
   }
+  return true
 }
 
 function currentConfirm(requestId: string): Extract<Screen, { name: 'confirm' }> | null {
@@ -485,6 +522,260 @@ function scheduleResultBack(alertId: string): void {
   }, RESULT_AUTO_BACK_MS)
 }
 
+// ---- AI summary (Detail) -------------------------------------------------------
+
+/** Latest summary request per alert; an older response is dropped. */
+const summaryReq = new Map<string, number>()
+let summarySeq = 0
+
+/** Load (or with `refresh`, regenerate) the summary; non-blocking, patches Detail when it lands. */
+function loadSummary(alertId: string, refresh = false): void {
+  const current = state.summaries.get(alertId)
+  if (!refresh && current && current.kind !== 'error') return
+  // A refresh keeps the old text on screen until the new one lands.
+  const previous = current?.kind === 'ready' ? current : null
+  state.summaries.set(alertId, previous ? { ...previous, note: 'refreshing…' } : { kind: 'loading' })
+  updateDetailBody(alertId)
+  const req = ++summarySeq
+  summaryReq.set(alertId, req)
+  const gen = sessionGen
+  const stale = () => gen !== sessionGen || summaryReq.get(alertId) !== req
+  fetchSummary(alertId, refresh).then(
+    (res) => {
+      if (stale()) return
+      state.summaries.set(alertId, { kind: 'ready', text: res.summary, source: res.source })
+      updateDetailBody(alertId)
+    },
+    (err: unknown) => {
+      if (stale()) return
+      if (err instanceof ApiError && err.status === 401 && !isMock()) {
+        void unpair()
+        return
+      }
+      const message = err instanceof ApiError && err.status === 429 ? 'rate limited' : errorText(err)
+      if (!previous) {
+        state.summaries.set(alertId, { kind: 'error', message })
+        updateDetailBody(alertId)
+        return
+      }
+      // Keep the text we already had; flag the failed refresh briefly.
+      const kept: SummaryView = { ...previous, note: `refresh failed: ${message}` }
+      state.summaries.set(alertId, kept)
+      updateDetailBody(alertId)
+      setTimeout(() => {
+        if (stale() || state.summaries.get(alertId) !== kept) return
+        state.summaries.set(alertId, previous)
+        updateDetailBody(alertId)
+      }, SUMMARY_NOTE_MS)
+    },
+  )
+}
+
+function updateDetailBody(alertId: string): void {
+  const s = state.screen
+  if (s.name !== 'detail' || s.alertId !== alertId) return
+  const alert = state.alerts.get(alertId)
+  if (alert) renderer.upgrade(DETAIL_BODY, detailBody(alert, state.summaries.get(alertId))).catch((err: unknown) => console.error(err))
+}
+
+// ---- voice commands --------------------------------------------------------------
+
+let voiceSeq = 0
+let mic: Recording | null = null
+
+function stopMic(): void {
+  mic?.cancel()
+  mic = null
+}
+
+function currentVoice(token: number): Extract<Screen, { name: 'voice' }> | null {
+  const s = state.screen
+  return s.name === 'voice' && s.token === token ? s : null
+}
+
+function showVoice(s: Extract<Screen, { name: 'voice' }>, view: VoiceView): void {
+  s.view = view
+  renderer.upgrade(VOICE_BODY, voiceBody(view)).catch((err: unknown) => console.error(err))
+  mirror()
+}
+
+/** Show a short notice, then return to the alert. */
+function voiceNotice(token: number, title: string, detail?: string): void {
+  const s = currentVoice(token)
+  if (!s) return
+  clearScreenTimer()
+  stopMic()
+  showVoice(s, { kind: 'message', title, detail })
+  const { alertId } = s
+  screenTimer = setTimeout(() => {
+    if (currentVoice(token)) go({ name: 'detail', alertId })
+  }, VOICE_MESSAGE_MS)
+}
+
+/** Long-press on Detail: record up to 6 s (tap stops), transcribe, then act on the intent. */
+async function startVoice(alertId: string): Promise<void> {
+  const token = ++voiceSeq
+  go({ name: 'voice', alertId, token, view: { kind: 'starting' } })
+  const gen = sessionGen
+  let source: VoiceMic = 'mock'
+  if (!isMock()) {
+    try {
+      const rec = await startRecording(bridge, () => currentVoice(token) !== null)
+      if (gen !== sessionGen || !currentVoice(token)) {
+        rec.cancel()
+        return
+      }
+      mic = rec
+      source = rec.source
+    } catch (err) {
+      voiceNotice(token, 'Microphone unavailable', errorText(err))
+      return
+    }
+  }
+  const s = currentVoice(token)
+  if (!s) return
+  const endsAt = Date.now() + VOICE_MAX_MS
+  const tick = () => {
+    const v = currentVoice(token)
+    if (!v || v.view.kind !== 'listening') return
+    const left = Math.ceil((endsAt - Date.now()) / 1000)
+    if (left <= 0) {
+      void finishVoice(token)
+      return
+    }
+    if (left !== v.view.secondsLeft) showVoice(v, { kind: 'listening', source, secondsLeft: left })
+    screenTimer = setTimeout(tick, ((endsAt - Date.now()) % 1000) || 1000)
+  }
+  showVoice(s, { kind: 'listening', source, secondsLeft: Math.ceil(VOICE_MAX_MS / 1000) })
+  screenTimer = setTimeout(tick, 1000)
+}
+
+function voiceErrorTitle(err: unknown): string {
+  if (!(err instanceof ApiError)) return 'Voice failed'
+  switch (err.status) {
+    case 0:
+      return 'Server unreachable'
+    case 400:
+    case 415:
+      return 'Audio not accepted'
+    case 404:
+      return 'Alert not found'
+    case 413:
+      return 'Too long, keep it short'
+    case 429:
+      return 'Too many voice requests, try later'
+    case 502:
+      return 'Speech service failed'
+    case 503:
+      return 'Voice is not configured on the server'
+    default:
+      return `Voice failed (HTTP ${err.status})`
+  }
+}
+
+/** Stop recording (tap or time limit), upload, show transcript + intent, then run it. */
+async function finishVoice(token: number): Promise<void> {
+  const s = currentVoice(token)
+  if (!s || s.view.kind !== 'listening') return
+  clearScreenTimer()
+  const { alertId } = s
+  const source = s.view.source
+  showVoice(s, { kind: 'transcribing', source })
+  const rec = mic
+  mic = null
+  // Mock mode has no microphone; the mock API scripts the "speech".
+  const clip: VoiceClip | null = rec ? await rec.stop() : { data: new Blob([]), contentType: 'audio/pcm' }
+  if (!currentVoice(token)) return
+  if (!clip) {
+    voiceNotice(token, 'No audio recorded', `mic: ${source}`)
+    return
+  }
+  const gen = sessionGen
+  try {
+    const res = await sendVoice(clip, alertId)
+    const v = currentVoice(token)
+    if (gen !== sessionGen || !v) return
+    showVoice(v, { kind: 'heard', source, transcript: res.transcript, intent: res.intent, next: intentNote(res.intent, alertId) })
+    screenTimer = setTimeout(() => {
+      if (currentVoice(token)) runIntent(token, res.intent)
+    }, VOICE_HEARD_MS)
+  } catch (err) {
+    if (gen !== sessionGen || !currentVoice(token)) return
+    if (err instanceof ApiError && err.status === 401 && !isMock()) {
+      void unpair()
+      return
+    }
+    voiceNotice(token, voiceErrorTitle(err), errorText(err))
+  }
+}
+
+function canRun(alertId: string, action: ActionKind): boolean {
+  return state.alerts.get(alertId)?.actions?.includes(action) ?? false
+}
+
+function nextAlertId(alertId: string): string | undefined {
+  const list = inboxSnapshot()
+  return list[list.findIndex((a) => a.id === alertId) + 1]?.id
+}
+
+/** What will happen, shown under the transcript. */
+function intentNote(intent: VoiceIntent, alertId: string): string {
+  switch (intent) {
+    case 'rerun':
+    case 'resolve':
+      return canRun(alertId, intent) ? `→ ${ACTION_LABEL[intent]}: opening confirm…` : `→ ${ACTION_LABEL[intent]} is not available here`
+    case 'next':
+      return nextAlertId(alertId) ? '→ Next alert…' : '→ No next alert'
+    case 'back':
+      return '→ Back to idle…'
+    case 'inbox':
+      return '→ Opening inbox…'
+    case 'summary':
+      return '→ Refreshing summary…'
+    case 'unknown':
+      return "→ Didn't catch that. Back to the alert…"
+  }
+}
+
+/**
+ * Act on a recognised command. Write actions only open the Confirm screen
+ * (Cancel focused); nothing spoken can confirm.
+ */
+function runIntent(token: number, intent: VoiceIntent): void {
+  const s = currentVoice(token)
+  if (!s) return
+  const { alertId } = s
+  switch (intent) {
+    case 'rerun':
+    case 'resolve':
+      if (!canRun(alertId, intent)) {
+        go({ name: 'detail', alertId })
+        return
+      }
+      void startIntent(alertId, intent, () => currentVoice(token) !== null).then((started) => {
+        // Another request was still running: never leave the voice screen stuck on "heard".
+        if (!started) voiceNotice(token, 'Busy, try again', 'Another action is still running')
+      })
+      return
+    case 'next':
+      go({ name: 'detail', alertId: nextAlertId(alertId) ?? alertId })
+      return
+    case 'back':
+      go({ name: 'idle' })
+      return
+    case 'inbox':
+      go({ name: 'inbox' })
+      return
+    case 'summary':
+      go({ name: 'detail', alertId })
+      loadSummary(alertId, true)
+      return
+    case 'unknown':
+      go({ name: 'detail', alertId })
+      return
+  }
+}
+
 // ---- input ------------------------------------------------------------
 
 function onGesture(g: Gesture): void {
@@ -501,6 +792,8 @@ function onGesture(g: Gesture): void {
   }
   if (g.type === 'foreground_exit') {
     stopPolling()
+    const v = state.screen
+    if (v.name === 'voice') go({ name: 'detail', alertId: v.alertId }) // never record in the background
     return
   }
 
@@ -550,7 +843,15 @@ function onGesture(g: Gesture): void {
       } else if (g.type === 'double_click') {
         backToActions(s.alertId)
       } else if (g.type === 'long_press') {
-        go({ name: 'idle' })
+        void startVoice(s.alertId)
+      }
+      return
+
+    case 'voice':
+      if (g.type === 'double_click') {
+        go({ name: 'detail', alertId: s.alertId }) // cancel: drops the recording
+      } else if ((g.type === 'click' || g.type === 'long_press') && s.view.kind === 'listening') {
+        void finishVoice(s.token)
       }
       return
 
@@ -560,8 +861,13 @@ function onGesture(g: Gesture): void {
         go({ name: 'detail', alertId: s.alertId })
       } else if (g.type === 'click' && g.listIndex !== undefined) {
         const kind = g.listIndex === 0 ? undefined : s.kinds[g.listIndex - 1]
-        if (kind) void startIntent(s.alertId, kind)
-        else go({ name: 'detail', alertId: s.alertId }) // Back, or the "No actions" row
+        const { alertId } = s
+        if (kind) {
+          void startIntent(alertId, kind, () => {
+            const cur = state.screen
+            return cur.name === 'actions' && cur.alertId === alertId
+          })
+        } else go({ name: 'detail', alertId }) // Back, or the "No actions" row
       }
       return
     }
@@ -587,6 +893,7 @@ function cleanup(): void {
   stopPolling()
   stopPairPolling()
   clearScreenTimer()
+  stopMic()
   unsubscribe()
 }
 
@@ -605,6 +912,12 @@ function mirror(): void {
       }</p>`
     return
   }
+  if (state.screen.name === 'voice') {
+    // Browser-mic fallback records on the phone: show progress there too.
+    app.innerHTML = `<h1 style="font-size:18px;margin:0 0 8px">Pagerline · voice</h1>
+      <pre style="white-space:pre-wrap;margin:0">${escapeHtml(voiceBody(state.screen.view))}</pre>`
+    return
+  }
   const rows = newestFirst()
     .slice(0, 10)
     .map((a) => `<li>[${a.severity}] ${escapeHtml(a.title)}</li>`)
@@ -620,6 +933,10 @@ function escapeHtml(s: string): string {
 // ---- boot ---------------------------------------------------------------
 
 const unsubscribe = bridge.onEvenHubEvent((event) => {
+  if (event.audioEvent) {
+    feedPcm(event.audioEvent.audioPcm)
+    return
+  }
   const g = toGesture(event)
   if (g) onGesture(g)
 })

@@ -5,6 +5,9 @@ import type {
   Alert,
   PairStartResponse,
   PairStatusResponse,
+  SummaryResponse,
+  VoiceIntent,
+  VoiceResponse,
 } from '@pagerline/shared'
 import { ApiError } from './errors'
 
@@ -119,6 +122,47 @@ export async function mockIntent(alertId: string, action: ActionKind): Promise<A
       : 'Marks the issue resolved in Sentry; it reopens if the error happens again.',
     dryRun: true,
   }
+}
+
+// ---- voice + summary -----------------------------------------------------------
+
+/**
+ * Mock "speech": each recording yields the next command in this script, so every
+ * intent can be demoed without a microphone. `{action}` = the alert's first action.
+ */
+const MOCK_VOICE_SCRIPT: { transcript: string; intent: VoiceIntent | 'action' }[] = [
+  { transcript: 'summarize this', intent: 'summary' },
+  { transcript: '{action} it', intent: 'action' },
+  { transcript: 'next alert', intent: 'next' },
+  { transcript: 'banana pancakes', intent: 'unknown' },
+  { transcript: 'go back', intent: 'back' },
+]
+let mockVoiceTurn = 0
+
+export async function mockVoice(alertId: string): Promise<VoiceResponse> {
+  await delay(700)
+  const alert = MOCK_ALERTS.find((a) => a.id === alertId)
+  const step = MOCK_VOICE_SCRIPT[mockVoiceTurn++ % MOCK_VOICE_SCRIPT.length]
+  const action = alert?.actions?.[0]
+  if (step.intent === 'action') {
+    // Alerts without an action: the "command" is simply not understood.
+    if (!action) return { transcript: 'fix it', intent: 'unknown', alertId }
+    return { transcript: step.transcript.replace('{action}', action), intent: action, alertId }
+  }
+  return { transcript: step.transcript, intent: step.intent, alertId }
+}
+
+const mockSummaryAt = new Map<string, string>()
+
+export async function mockSummary(alertId: string, refresh: boolean): Promise<SummaryResponse> {
+  await delay(900)
+  const alert = MOCK_ALERTS.find((a) => a.id === alertId)
+  if (!alert) throw new ApiError(404, 'alert not found')
+  const cached = mockSummaryAt.get(alertId)
+  const generatedAt = !cached || refresh ? new Date().toISOString() : cached
+  mockSummaryAt.set(alertId, generatedAt)
+  const summary = `Mock summary: ${alert.title}. ${alert.summary}`.slice(0, 240)
+  return { alertId, summary, source: cached && !refresh ? 'cache' : 'ai', generatedAt }
 }
 
 export async function mockConfirm(requestId: string, nonce: string): Promise<ActionConfirmResult> {

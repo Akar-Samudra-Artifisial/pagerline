@@ -6,9 +6,19 @@ import type {
   AlertsResponse,
   PairStartResponse,
   PairStatusResponse,
+  SummaryResponse,
+  VoiceResponse,
 } from '@pagerline/shared'
 import { ApiError } from './errors'
-import { MOCK_ALERTS, mockConfirm, mockIntent, mockPairStart, mockPairStatus } from './mock'
+import {
+  MOCK_ALERTS,
+  mockConfirm,
+  mockIntent,
+  mockPairStart,
+  mockPairStatus,
+  mockSummary,
+  mockVoice,
+} from './mock'
 
 export { ApiError }
 
@@ -36,18 +46,30 @@ export function pairUrl(): string {
   return isMock() ? 'pagerline.example/pair' : `${API_BASE}/pair`
 }
 
+/** A request body that is sent as-is with its own Content-Type (audio uploads). */
+interface RawBody {
+  raw: BodyInit
+  contentType: string
+}
+
+function isRawBody(body: unknown): body is RawBody {
+  return typeof body === 'object' && body !== null && 'raw' in body && 'contentType' in body
+}
+
 async function request<T>(method: 'GET' | 'POST', path: string, bearer: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {}
   if (bearer) headers.Authorization = `Bearer ${bearer}`
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  let payload: BodyInit | undefined
+  if (isRawBody(body)) {
+    headers['Content-Type'] = body.contentType
+    payload = body.raw
+  } else if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    payload = JSON.stringify(body)
+  }
   let res: Response
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      cache: 'no-store',
-    })
+    res = await fetch(`${API_BASE}${path}`, { method, headers, body: payload, cache: 'no-store' })
   } catch {
     throw new ApiError(0, 'Server unreachable')
   }
@@ -98,4 +120,31 @@ export function createIntent(alertId: string, action: ActionKind): Promise<Actio
 export function confirmAction(requestId: string, nonce: string): Promise<ActionConfirmResult> {
   if (isMock()) return mockConfirm(requestId, nonce)
   return request<ActionConfirmResult>('POST', '/api/actions/confirm', deviceToken, { requestId, nonce })
+}
+
+/** Recorded audio ready for upload: raw PCM s16le mono, or a browser container (webm/ogg/mp4). */
+export interface VoiceClip {
+  data: Blob
+  /** MIME type without parameters, e.g. `audio/pcm`, `audio/webm`. */
+  contentType: string
+  /** PCM only. */
+  sampleRate?: number
+}
+
+/** Transcribe + classify a spoken command. Never runs an action (see VoiceIntent). */
+export function sendVoice(clip: VoiceClip, alertId: string): Promise<VoiceResponse> {
+  if (isMock()) return mockVoice(alertId)
+  const params = new URLSearchParams({ alertId })
+  if (clip.contentType === 'audio/pcm') params.set('sampleRate', String(clip.sampleRate ?? 16000))
+  return request<VoiceResponse>('POST', `/api/voice?${params.toString()}`, deviceToken, {
+    raw: clip.data,
+    contentType: clip.contentType,
+  })
+}
+
+/** AI summary of one alert (server caches it); `refresh` asks for a new one. */
+export function fetchSummary(alertId: string, refresh = false): Promise<SummaryResponse> {
+  if (isMock()) return mockSummary(alertId, refresh)
+  const q = refresh ? '?refresh=1' : ''
+  return request<SummaryResponse>('POST', `/api/alerts/${encodeURIComponent(alertId)}/summary${q}`, deviceToken)
 }
