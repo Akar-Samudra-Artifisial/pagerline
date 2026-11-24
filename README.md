@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/brand/logo-wordmark.svg" alt="Pagerline" width="360" /></p>
+
 # Pagerline
 
 Heads-up on-call HUD for **Even Realities G2** glasses. CI failures (GitHub Actions) and Sentry

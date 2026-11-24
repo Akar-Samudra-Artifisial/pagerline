@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Pagerline logo (glasses + pulse mark) in `assets/brand/` (SVG icon/mark/wordmark, PNG 1024/512/256), used as
+  the server app icon, the glasses favicon and the README header.
+
 ### Changed
 
 - `GLASSES_ORIGINS=*` answers the glasses APIs with `Access-Control-Allow-Origin: *` (no credentials) for the
