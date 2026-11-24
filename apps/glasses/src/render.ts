@@ -22,7 +22,12 @@ export class Renderer {
       const spec = { containerTotalNum, textObject: page.textObject, listObject: page.listObject }
       if (!this.started) {
         const result = await this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(spec))
-        if (result !== 0) throw new Error(`createStartUpPageContainer failed (${String(result)})`)
+        if (result !== 0) {
+          // A WebView reload (e.g. dev HMR) keeps the host's page alive, so the
+          // startup call is refused; fall back to rebuilding that page.
+          const rebuilt = await this.bridge.rebuildPageContainer(new RebuildPageContainer(spec))
+          if (!rebuilt) throw new Error(`createStartUpPageContainer failed (${String(result)})`)
+        }
         this.started = true
         return
       }

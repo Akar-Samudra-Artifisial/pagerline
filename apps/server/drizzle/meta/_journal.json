@@ -15,6 +15,13 @@
       "when": 1795509124602,
       "tag": "0001_sentry_issue_dedup",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795514620282,
+      "tag": "0002_actions_pairing",
+      "breakpoints": true
     }
   ]
 }

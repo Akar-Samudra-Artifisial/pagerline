@@ -1,6 +1,7 @@
 import type { Alert, AlertSeverity, AlertSource, AlertStatus, AlertsResponse } from '@pagerline/shared'
 import { asc, desc, gt } from 'drizzle-orm'
 import { getDb, schema } from '@/db/client'
+import { availableActions } from '@/lib/actions'
 import { authenticateDevice } from '@/lib/auth'
 import { corsHeaders, json, preflight } from '@/lib/http'
 
@@ -11,8 +12,8 @@ export function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const cors = corsHeaders(request)
-  if (!authenticateDevice(request)) return json({ error: 'unauthorized' }, 401, cors)
+  const cors = { ...corsHeaders(request), 'Cache-Control': 'no-store' }
+  if (!(await authenticateDevice(request))) return json({ error: 'unauthorized' }, 401, cors)
 
   const sinceRaw = new URL(request.url).searchParams.get('since')
   const since = sinceRaw === null || sinceRaw === '' ? null : Number(sinceRaw)
@@ -33,10 +34,12 @@ export async function GET(request: Request) {
     summary: a.summary,
     scope: a.scope,
     url: a.url,
+    target: a.target,
     createdAt: a.createdAt,
   }
 
   // No cursor → latest page (newest first then reversed); with cursor → everything after it.
+  // A status change moves an alert to a new seq, so the same `id` can reappear: clients upsert by id.
   const rows =
     since === null
       ? (await db.select(columns).from(a).orderBy(desc(a.seq)).limit(PAGE_LIMIT)).reverse()
@@ -48,6 +51,7 @@ export async function GET(request: Request) {
     severity: r.severity as AlertSeverity,
     status: r.status as AlertStatus,
     createdAt: r.createdAt.toISOString(),
+    actions: availableActions(r),
   }))
   // Cursor comes from the rows actually returned (both branches end with the highest seq),
   // so it can never skip past something the client has not received.

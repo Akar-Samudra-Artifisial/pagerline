@@ -1,4 +1,12 @@
-import type { Alert } from '@pagerline/shared'
+import type {
+  ActionConfirmResult,
+  ActionKind,
+  ActionPreview,
+  Alert,
+  PairStartResponse,
+  PairStatusResponse,
+} from '@pagerline/shared'
+import { ApiError } from './errors'
 
 const now = Date.now()
 const ago = (min: number) => new Date(now - min * 60_000).toISOString()
@@ -17,6 +25,8 @@ export const MOCK_ALERTS: Alert[] = [
     scope: 'acme/checkout-api',
     url: null,
     createdAt: ago(14),
+    target: { repo: 'acme/checkout-api', runId: 9912345 },
+    actions: ['rerun'],
   },
   {
     id: 'mock-2',
@@ -30,6 +40,8 @@ export const MOCK_ALERTS: Alert[] = [
     scope: 'checkout-api',
     url: null,
     createdAt: ago(6),
+    target: { org: 'acme', project: 'checkout-api', issueId: '4711' },
+    actions: ['resolve'],
   },
   {
     id: 'mock-3',
@@ -43,5 +55,89 @@ export const MOCK_ALERTS: Alert[] = [
     scope: null,
     url: null,
     createdAt: ago(2),
+    target: null,
+    actions: [],
   },
 ]
+
+// ---- pairing: auto-approves a few seconds after the code is shown ----------
+
+const MOCK_APPROVE_AFTER_MS = 4000
+const mockPairings = new Map<string, number>()
+
+export function mockPairStart(): PairStartResponse {
+  const pollSecret = `mock-poll-${mockPairings.size + 1}`
+  mockPairings.set(pollSecret, Date.now())
+  return {
+    code: 'MOCK42',
+    pollSecret,
+    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    pollIntervalMs: 1000,
+  }
+}
+
+export function mockPairStatus(pollSecret: string): PairStatusResponse {
+  const startedAt = mockPairings.get(pollSecret)
+  if (startedAt === undefined) return { status: 'expired' }
+  if (Date.now() - startedAt < MOCK_APPROVE_AFTER_MS) {
+    return { status: 'pending', expiresAt: new Date(startedAt + 10 * 60_000).toISOString() }
+  }
+  mockPairings.delete(pollSecret)
+  return { status: 'approved', deviceId: 'mock-device', deviceName: 'Mock G2', token: 'mock-device-token' }
+}
+
+// ---- write actions: same intent → nonce → confirm flow as the server ---------
+
+const MOCK_TTL_MS = 60_000
+const mockRequests = new Map<string, { nonce: string; alertId: string; action: ActionKind; expiresAt: number }>()
+let mockSeq = 0
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+export async function mockIntent(alertId: string, action: ActionKind): Promise<ActionPreview> {
+  await delay(300)
+  const alert = MOCK_ALERTS.find((a) => a.id === alertId)
+  if (!alert) throw new ApiError(404, 'alert not found')
+  if (!alert.actions?.includes(action)) throw new ApiError(422, `${action} is not available for this alert`)
+  const requestId = `mock-req-${++mockSeq}`
+  const nonce = `mock-nonce-${mockSeq}`
+  const expiresAt = Date.now() + MOCK_TTL_MS
+  mockRequests.set(requestId, { nonce, alertId, action, expiresAt })
+  const t = alert.target
+  const isRerun = action === 'rerun'
+  return {
+    requestId,
+    nonce,
+    expiresAt: new Date(expiresAt).toISOString(),
+    alertId,
+    action,
+    headline: isRerun ? 'Re-run failed jobs' : 'Resolve Sentry issue',
+    target:
+      t && 'runId' in t ? `${t.repo} · run ${t.runId}` : t && 'issueId' in t ? `${t.project ?? '?'} · issue ${t.issueId}` : '?',
+    detail: isRerun
+      ? 'Starts a new attempt of only the failed jobs in this workflow run.'
+      : 'Marks the issue resolved in Sentry; it reopens if the error happens again.',
+    dryRun: true,
+  }
+}
+
+export async function mockConfirm(requestId: string, nonce: string): Promise<ActionConfirmResult> {
+  await delay(600)
+  const req = mockRequests.get(requestId)
+  if (!req) throw new ApiError(404, 'action request not found')
+  if (req.nonce !== nonce) throw new ApiError(403, 'invalid nonce')
+  mockRequests.delete(requestId)
+  if (Date.now() > req.expiresAt) throw new ApiError(410, 'action request expired')
+  const alert = MOCK_ALERTS.find((a) => a.id === req.alertId)
+  if (alert && req.action === 'resolve') alert.status = 'resolved'
+  return {
+    requestId,
+    alertId: req.alertId,
+    action: req.action,
+    status: 'succeeded',
+    message: `mock: ${req.action} accepted`,
+    providerStatus: null,
+    dryRun: true,
+    alertStatus: alert?.status ?? 'open',
+  }
+}

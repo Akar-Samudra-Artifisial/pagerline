@@ -1,5 +1,13 @@
+import type { GithubRunTarget } from '@pagerline/shared'
 import { truncate, type NormalizedAlert } from './ingest'
-import { obj, str, type Json } from './payload'
+import { num, obj, str, type Json } from './payload'
+
+/** `{repo, runId}` from a workflow_run; run id falls back to the `/actions/runs/<id>` html_url. */
+function runTarget(repo: string | null, run: Json): GithubRunTarget | null {
+  const fromUrl = /\/actions\/runs\/(\d+)/.exec(str(run.html_url) ?? '')?.[1]
+  const runId = num(run.id) ?? (fromUrl ? Number(fromUrl) : null)
+  return repo && runId !== null && Number.isSafeInteger(runId) ? { repo, runId } : null
+}
 
 /**
  * Map a GitHub webhook to an alert, or return a reason string when the event
@@ -28,6 +36,7 @@ export function normalizeGithub(event: string, payload: Json): NormalizedAlert |
       scope: repo,
       url: str(run.html_url),
       dedupKey: null,
+      target: runTarget(repo, run),
     }
   }
 
@@ -50,6 +59,7 @@ export function normalizeGithub(event: string, payload: Json): NormalizedAlert |
       scope: repo,
       url: str(issue.html_url),
       dedupKey: null,
+      target: null,
     }
   }
 

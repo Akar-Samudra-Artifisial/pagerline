@@ -1,5 +1,4 @@
 import type { Alert } from '@pagerline/shared'
-import { TIER1_ACTIONS, TIER2_ACTIONS } from '@pagerline/shared'
 import { TextContainerProperty } from '@evenrealities/even_hub_sdk'
 import { DETAIL_BODY, DETAIL_FOOTER, FOOTER_H, HEADER_H, MAX_TEXT_CHARS, SCREEN_H, SCREEN_W } from '../ids'
 import { ago, sevTag } from './format'
@@ -13,13 +12,11 @@ export function detailBody(a: Alert): string {
   return text.length <= MAX_TEXT_CHARS ? text : `${text.slice(0, MAX_TEXT_CHARS - 1)}…`
 }
 
-export function detailFooter(menuOpen: boolean): string {
-  return menuOpen
-    ? `Actions (soon): ${TIER1_ACTIONS.join(' ')} | ${TIER2_ACTIONS.join(' ')}`
-    : 'Tap/swipe up: back · Swipe down: next · Double-tap: actions'
+export function detailFooter(): string {
+  return 'Tap/up: back · Down: next · Double-tap: actions'
 }
 
-export function detailPage(headerContent: string, alert: Alert, menuOpen: boolean): Page {
+export function detailPage(headerContent: string, alert: Alert): Page {
   const bodyH = SCREEN_H - HEADER_H - FOOTER_H - 8
   return {
     textObject: [
@@ -48,7 +45,7 @@ export function detailPage(headerContent: string, alert: Alert, menuOpen: boolea
         paddingLength: 4,
         containerID: DETAIL_FOOTER.id,
         containerName: DETAIL_FOOTER.name,
-        content: detailFooter(menuOpen),
+        content: detailFooter(),
         isEventCapture: 0,
       }),
     ],

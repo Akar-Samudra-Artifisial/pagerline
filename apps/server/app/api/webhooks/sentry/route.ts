@@ -1,6 +1,6 @@
 import { verifySentrySignature } from '@/lib/crypto'
 import { json, notConfigured, readBodyLimited } from '@/lib/http'
-import { auditIgnored, ingestAlert } from '@/lib/ingest'
+import { auditIgnored, ingestAlert, ingestHttpStatus } from '@/lib/ingest'
 import { parseJson } from '@/lib/payload'
 import { normalizeSentry } from '@/lib/sentry'
 
@@ -45,5 +45,5 @@ export async function POST(request: Request) {
   }
 
   const result = await ingestAlert('sentry', deliveryId, normalized, payload)
-  return json(result, result.status === 'created' ? 201 : 200)
+  return json(result, ingestHttpStatus(result))
 }

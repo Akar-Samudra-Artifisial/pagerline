@@ -1,7 +1,7 @@
 import { verifyGithubSignature } from '@/lib/crypto'
 import { normalizeGithub } from '@/lib/github'
 import { json, notConfigured, readBodyLimited } from '@/lib/http'
-import { auditIgnored, ingestAlert } from '@/lib/ingest'
+import { auditIgnored, ingestAlert, ingestHttpStatus } from '@/lib/ingest'
 import { parseJson } from '@/lib/payload'
 
 export async function POST(request: Request) {
@@ -29,5 +29,5 @@ export async function POST(request: Request) {
   }
 
   const result = await ingestAlert('github', deliveryId, normalized, payload)
-  return json(result, result.status === 'created' ? 201 : 200)
+  return json(result, ingestHttpStatus(result))
 }

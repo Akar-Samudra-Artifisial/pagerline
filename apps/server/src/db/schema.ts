@@ -1,4 +1,6 @@
-import { bigserial, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import type { AlertTarget } from '@pagerline/shared'
+import { sql } from 'drizzle-orm'
+import { bigserial, check, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 export const alerts = pgTable(
   'alerts',
@@ -19,6 +21,8 @@ export const alerts = pgTable(
     scope: text('scope'),
     url: text('url'),
     payload: jsonb('payload').notNull(),
+    /** Structured provider target for actions (`{repo, runId}` / `{org?, project?, issueId}`); null = no action target. */
+    target: jsonb('target').$type<AlertTarget>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -38,13 +42,54 @@ export const devices = pgTable('devices', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 })
 
-export const pairingCodes = pgTable('pairing_codes', {
-  code: text('code').primaryKey(),
-  deviceId: uuid('device_id').references(() => devices.id, { onDelete: 'cascade' }),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-  usedAt: timestamp('used_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-})
+export const pairingCodes = pgTable(
+  'pairing_codes',
+  {
+    code: text('code').primaryKey(),
+    deviceId: uuid('device_id').references(() => devices.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    /** Set when the device has claimed its token (token is returned exactly once). */
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    /** SHA-256 hex of the secret the device polls `/api/pair/status` with. */
+    pollSecretHash: text('poll_secret_hash'),
+    /** Set when an admin approved the code. */
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    /** SHA-256 hex of the requester IP, for the per-IP start rate limit. */
+    requesterIpHash: text('requester_ip_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('pairing_codes_poll_secret_uq').on(t.pollSecretHash),
+    index('pairing_codes_ip_created_idx').on(t.requesterIpHash, t.createdAt),
+  ],
+)
+
+export const actionRequests = pgTable(
+  'action_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    alertId: uuid('alert_id')
+      .notNull()
+      .references(() => alerts.id, { onDelete: 'cascade' }),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    action: text('action').notNull(),
+    /** SHA-256 hex of the one-time confirm nonce; the raw nonce is only sent to the device. */
+    nonceHash: text('nonce_hash').notNull(),
+    status: text('status').notNull().default('pending'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    result: jsonb('result'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('action_requests_device_created_idx').on(t.deviceId, t.createdAt),
+    check(
+      'action_requests_status_ck',
+      sql`${t.status} in ('pending', 'confirmed', 'expired', 'failed', 'succeeded')`,
+    ),
+  ],
+)
 
 export const auditLog = pgTable(
   'audit_log',

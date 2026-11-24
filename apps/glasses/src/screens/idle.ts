@@ -11,7 +11,7 @@ export function idleBody(alertsNewestFirst: Alert[]): string {
     recent.length === 0
       ? ['All quiet. No alerts yet.']
       : recent.map((a) => `${sevTag(a)}  ${ago(a.createdAt)}  ${clip(a.title, 44)}`)
-  return [...lines, '', 'Tap: inbox  ·  Double-tap: exit'].join('\n').slice(0, MAX_TEXT_CHARS)
+  return [...lines, '', 'Tap: inbox  ·  Double-tap: exit  ·  Hold: re-pair'].join('\n').slice(0, MAX_TEXT_CHARS)
 }
 
 export function idlePage(headerContent: string, alertsNewestFirst: Alert[]): Page {

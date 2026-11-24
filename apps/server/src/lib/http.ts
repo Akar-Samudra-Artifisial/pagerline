@@ -51,6 +51,28 @@ export async function readBodyLimited(request: Request, maxBytes = MAX_WEBHOOK_B
   return Buffer.concat(chunks).toString('utf8')
 }
 
+const MAX_JSON_BYTES = 16 * 1024
+
+/** Small JSON object body for API calls from the glasses/scripts; null when missing, too big, or not an object. */
+export async function readJsonObject(request: Request): Promise<Record<string, unknown> | null> {
+  const body = await readBodyLimited(request, MAX_JSON_BYTES)
+  if (body === null || body === '') return body === '' ? {} : null
+  try {
+    const parsed: unknown = JSON.parse(body)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_RE.test(value)
+}
+
 /** 500 for a missing server secret: the env name goes to the server log, never the response. */
 export function notConfigured(envName: string): Response {
   console.error(`[pagerline] ${envName} is not configured`)
