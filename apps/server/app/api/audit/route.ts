@@ -12,11 +12,14 @@ export function OPTIONS(request: Request) {
  * Bearer device token → only that device's own entries; Bearer ADMIN_SECRET → everything.
  */
 export async function GET(request: Request) {
-  const cors = { ...corsHeaders(request), 'Cache-Control': 'no-store' }
+  // CORS only for a valid device token: admin-secret and failed-auth responses must not be readable
+  // cross-origin (GLASSES_ORIGINS may be `*`).
+  let cors: Record<string, string> = { 'Cache-Control': 'no-store' }
   let deviceId: string | null = null
   const device = await authenticateDevice(request)
   if (device) {
     deviceId = device.deviceId
+    cors = { ...corsHeaders(request), ...cors }
   } else {
     const check = await verifyAdminRequest(request, 'api.audit')
     if (check !== 'ok') {

@@ -7,10 +7,24 @@ function allowedOrigins(): string[] {
     .filter(Boolean)
 }
 
+/**
+ * `GLASSES_ORIGINS=*` answers any origin with `Access-Control-Allow-Origin: *` (never with credentials):
+ * the Even Hub WebView origin is undocumented (reported as `http://127.0.0.1:<random port>`), and these
+ * APIs authenticate with a Bearer token only, no cookies. Otherwise an exact, comma-separated list.
+ */
 export function corsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get('origin')
+  const allowed = allowedOrigins()
+  if (allowed.includes('*')) {
+    return {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Max-Age': '600',
+    }
+  }
   const headers: Record<string, string> = { Vary: 'Origin' }
-  if (origin && allowedOrigins().includes(origin)) {
+  if (origin && allowed.includes(origin)) {
     headers['Access-Control-Allow-Origin'] = origin
     headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'

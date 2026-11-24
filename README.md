@@ -127,7 +127,9 @@ never compiled into the bundle.
 **Mock mode**: leave `VITE_API_BASE` empty or set `VITE_MOCK=1` and the app runs fully offline on built-in
 demo alerts (no server, no pairing).
 
-Package for Even Hub: `pnpm --filter @pagerline/glasses pack` (produces an `.ehpk`).
+Package for Even Hub: `pnpm --filter @pagerline/glasses run pack` (produces `apps/glasses/pagerline.ehpk`
+pointing at production; use `run`, since plain `pnpm pack` is the npm tarball command). See
+[Deploy](#deploy-vercel--neon).
 
 ## Environment
 
@@ -153,10 +155,14 @@ Glasses app: `VITE_API_BASE`, `VITE_MOCK` (see `apps/glasses/.env.example`). No 
    `DATABASE_URL=<neon url> pnpm db:migrate`.
 2. Create a Vercel project with root directory `apps/server` (framework: Next.js, pnpm workspace).
 3. Set the environment variables above in Vercel (do **not** set `DEVICE_TOKEN`, `VOICE_STT_MOCK`,
-   `SUMMARY_AI_MOCK` in production; they are ignored there anyway). Set `GLASSES_ORIGINS` to the origin(s)
-   the glasses WebView uses.
-4. Build the glasses app with `VITE_API_BASE=https://<your-app>.vercel.app` and add that URL to the
-   `network` whitelist in `apps/glasses/app.json`.
+   `SUMMARY_AI_MOCK` in production; they are ignored there anyway). Set `GLASSES_ORIGINS=*` in production:
+   the Even Hub WebView origin is not documented (reported as `http://127.0.0.1:<port>`, changing per launch).
+   Locally an exact comma-separated list (e.g. `http://localhost:5173`) works.
+4. Package the glasses app: `pnpm --filter @pagerline/glasses run pack` builds with
+   `VITE_API_BASE=https://pagerline.vercel.app` (overriding `.env.local`) and writes
+   `apps/glasses/pagerline.ehpk`. For another deployment, change that URL in the `pack` script and the
+   `network` whitelist in `apps/glasses/app.json` (HTTPS only). The package contains no token; first launch
+   shows the pairing screen.
 
 ## Webhook setup
 
@@ -215,6 +221,11 @@ Web pages: `/pair` (approve/revoke devices) and `/audit` (audit log), both behin
   20 per 10 min per device and 100 per hour globally; pair starts per IP.
 - **Audit log** for pairing, actions, voice intents and summaries (`/audit`).
 - Webhooks: HMAC verification with constant-time compare, replay dedup, 1 MB body limit.
+- **CORS `*` for the glasses APIs** (`GLASSES_ORIGINS=*`): these APIs authenticate with a Bearer token only,
+  never cookies, and `Access-Control-Allow-Credentials` is never sent, so a wildcard grants a foreign page
+  nothing it could not do without a token. `GET /api/audit` adds CORS only for a valid device token, so
+  admin-secret responses (including failed guesses) are not readable cross-origin. The `/pair` and `/audit` pages use Server Actions, which keep
+  Next.js's own origin check and are unaffected.
 - **Third-party data processing**:
   - **Anthropic**: when an AI summary is requested, selected alert fields (source, kind, severity, status,
     scope such as repo/project, title and a truncated description) are sent to the Anthropic API. The raw

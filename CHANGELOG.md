@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `GLASSES_ORIGINS=*` answers the glasses APIs with `Access-Control-Allow-Origin: *` (no credentials) for the
+  Even Hub WebView, whose origin is undocumented; an exact origin list still works for local dev.
+- `pnpm --filter @pagerline/glasses run pack` builds against `https://pagerline.vercel.app` and writes
+  `apps/glasses/pagerline.ehpk` (`--sdk-ver 0.0.16`); the manifest network whitelist is HTTPS prod only and
+  `min_app_version` is 2.2.10 (the SDK 0.0.16 floor).
+
+### Security
+
+- `GET /api/audit` sends CORS headers only for a valid device token; admin-secret and failed-auth responses
+  are no longer readable cross-origin.
+
 ## [0.1.0] - 2026-11-24
 
 ### Added

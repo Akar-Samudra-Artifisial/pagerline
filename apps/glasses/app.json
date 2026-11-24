@@ -3,11 +3,11 @@
   "edition": "202601",
   "name": "Pagerline",
   "version": "0.1.0",
-  "min_app_version": "2.0.0",
+  "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.16",
   "entrypoint": "index.html",
   "permissions": [
-    { "name": "network", "desc": "Fetch on-call alerts from your Pagerline server.", "whitelist": ["https://pagerline.vercel.app", "http://localhost:3300"] },
+    { "name": "network", "desc": "Fetch on-call alerts from your Pagerline server.", "whitelist": ["https://pagerline.vercel.app"] },
     { "name": "g2-microphone", "desc": "Record short voice commands (hold on an alert) for transcription." },
     { "name": "phone-microphone", "desc": "Fallback microphone for voice commands when the glasses mic is unavailable." }
   ],
